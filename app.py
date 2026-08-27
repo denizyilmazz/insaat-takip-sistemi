@@ -5,10 +5,11 @@ from datetime import datetime
 
 # --- VERİTABANI İŞLEMLERİ ---
 def init_db():
-    conn = sqlite3.connect("insaat_takip.db", check_same_thread=False)
+    # Veritabanı adını v2 yaparak tertemiz yeni bir başlangıç sağlıyoruz
+    conn = sqlite3.connect("insaat_takip_v2.db", check_same_thread=False)
     cursor = conn.cursor()
     
-    # Kullanıcılar tablosu (is_admin yetki alanı ile)
+    # Kullanıcılar tablosu
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,7 +83,7 @@ def init_db():
 init_db()
 
 def run_query(query, params=(), fetch=False):
-    conn = sqlite3.connect("insaat_takip.db", check_same_thread=False)
+    conn = sqlite3.connect("insaat_takip_v2.db", check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute(query, params)
     if fetch:
