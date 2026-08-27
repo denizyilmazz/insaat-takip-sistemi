@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 
-# --- VERİTABANI İŞLEMLERİ (İsim sabitlendi: insaat_takip.db) ---
+# --- VERİTABANI VE AKILLI GÜNCELLEME İŞLEMLERİ ---
 def init_db():
     conn = sqlite3.connect("insaat_takip.db", check_same_thread=False)
     cursor = conn.cursor()
@@ -18,6 +18,12 @@ def init_db():
         )
     ''')
     
+    # Eskiden kalan tablolarda eksik sütun varsa otomatik ekle (Hata önleyici)
+    cursor.execute("PRAGMA table_info(users)")
+    user_cols = [col[1] for col in cursor.fetchall()]
+    if "is_admin" not in user_cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
+    
     # Ayarlar tablosu (Gizli Davet Kodu için)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS settings (
@@ -25,16 +31,6 @@ def init_db():
             value TEXT
         )
     ''')
-    
-    # Varsayılan yönetici hesabı yoksa oluştur (Kullanıcı adı: admin, Şifre: 12345)
-    cursor.execute("SELECT COUNT(*) FROM users")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute("INSERT INTO users (username, password, is_admin) VALUES (?, ?, ?)", ("admin", "12345", 1))
-        
-    # Varsayılan davet kodu yoksa oluştur
-    cursor.execute("SELECT value FROM settings WHERE key = 'invite_code'")
-    if not cursor.fetchone():
-        cursor.execute("INSERT INTO settings (key, value) VALUES ('invite_code', 'santiye2026')")
     
     # Projeler tablosu
     cursor.execute('''
@@ -45,6 +41,10 @@ def init_db():
             total_apartments INTEGER
         )
     ''')
+    cursor.execute("PRAGMA table_info(projects)")
+    proj_cols = [col[1] for col in cursor.fetchall()]
+    if "total_apartments" not in proj_cols:
+        cursor.execute("ALTER TABLE projects ADD COLUMN total_apartments INTEGER")
     
     # Proje Kat Fiyatlandırma Planı tablosu
     cursor.execute('''
@@ -71,6 +71,18 @@ def init_db():
             sale_date TEXT
         )
     ''')
+    cursor.execute("PRAGMA table_info(customers)")
+    cust_cols = [col[1] for col in cursor.fetchall()]
+    if "blok" not in cust_cols:
+        cursor.execute("ALTER TABLE customers ADD COLUMN blok TEXT")
+    if "kat" not in cust_cols:
+        cursor.execute("ALTER TABLE customers ADD COLUMN kat TEXT")
+    if "daire" not in cust_cols:
+        cursor.execute("ALTER TABLE customers ADD COLUMN daire TEXT")
+    if "description" not in cust_cols:
+        cursor.execute("ALTER TABLE customers ADD COLUMN description TEXT")
+    if "sale_date" not in cust_cols:
+        cursor.execute("ALTER TABLE customers ADD COLUMN sale_date TEXT")
     
     # Müşteri Ödemeleri
     cursor.execute('''
@@ -94,6 +106,12 @@ def init_db():
             start_date TEXT
         )
     ''')
+    cursor.execute("PRAGMA table_info(tradesmen)")
+    trade_cols = [col[1] for col in cursor.fetchall()]
+    if "description" not in trade_cols:
+        cursor.execute("ALTER TABLE tradesmen ADD COLUMN description TEXT")
+    if "start_date" not in trade_cols:
+        cursor.execute("ALTER TABLE tradesmen ADD COLUMN start_date TEXT")
     
     # Usta İşlemleri (Hakediş / Borç ve Yapılan Ödemeler)
     cursor.execute('''
@@ -106,6 +124,16 @@ def init_db():
             description TEXT
         )
     ''')
+    
+    # Varsayılan yönetici hesabı yoksa oluştur (Kullanıcı adı: admin, Şifre: 12345)
+    cursor.execute("SELECT COUNT(*) FROM users")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO users (username, password, is_admin) VALUES (?, ?, ?)", ("admin", "12345", 1))
+        
+    # Varsayılan davet kodu yoksa oluştur
+    cursor.execute("SELECT value FROM settings WHERE key = 'invite_code'")
+    if not cursor.fetchone():
+        cursor.execute("INSERT INTO settings (key, value) VALUES ('invite_code', 'santiye2026')")
     
     conn.commit()
     conn.close()
