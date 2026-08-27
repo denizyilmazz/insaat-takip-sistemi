@@ -8,14 +8,20 @@ def init_db():
     conn = sqlite3.connect("insaat_takip.db", check_same_thread=False)
     cursor = conn.cursor()
     
-    # Kullanıcılar tablosu
+    # Kullanıcılar tablosu (is_admin yetki alanı ile)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE,
-            password TEXT
+            password TEXT,
+            is_admin INTEGER DEFAULT 0
         )
     ''')
+    
+    # Varsayılan yönetici hesabı yoksa oluştur (Kullanıcı adı: admin, Şifre: 12345)
+    cursor.execute("SELECT COUNT(*) FROM users")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO users (username, password, is_admin) VALUES (?, ?, ?)", ("admin", "12345", 1))
     
     # Projeler tablosu
     cursor.execute('''
@@ -90,42 +96,49 @@ def run_query(query, params=(), fetch=False):
 if "user_id" not in st.session_state:
     st.session_state.user_id = None
     st.session_state.username = None
+    st.session_state.is_admin = 0
 
 st.set_page_config(page_title="Şantiye ve Cari Takip Sistemi", layout="wide")
 
 if st.session_state.user_id is None:
     st.title("🏗️ Şantiye Yönetim Sistemi - Giriş")
-    tab1, tab2 = st.tabs(["Giriş Yap", "Kayıt Ol"])
+    st.info("Bu sistem kontrollü erişime sahiptir. Lütfen tarafınıza tanımlanan kullanıcı adı ve şifre ile giriş yapın.")
     
-    with tab1:
-        username = st.text_input("Kullanıcı Adı", key="login_user")
-        password = st.text_input("Şifre", type="password", key="login_pass")
-        if st.button("Giriş Yap"):
-            user = run_query("SELECT id FROM users WHERE username = ? AND password = ?", (username, password), fetch=True)
-            if user:
-                st.session_state.user_id = user[0][0]
-                st.session_state.username = username
-                st.rerun()
-            else:
-                st.error("Kullanıcı adı veya şifre hatalı!")
-                
-    with tab2:
-        new_user = st.text_input("Yeni Kullanıcı Adı", key="reg_user")
-        new_pass = st.text_input("Yeni Şifre", type="password", key="reg_pass")
-        if st.button("Kayıt Ol"):
-            try:
-                run_query("INSERT INTO users (username, password) VALUES (?, ?)", (new_user, new_pass))
-                st.success("Kayıt başarılı! Giriş yapabilirsiniz.")
-            except:
-                st.error("Bu kullanıcı adı zaten alınmış.")
+    username = st.text_input("Kullanıcı Adı", key="login_user")
+    password = st.text_input("Şifre", type="password", key="login_pass")
+    if st.button("Giriş Yap"):
+        user = run_query("SELECT id, username, is_admin FROM users WHERE username = ? AND password = ?", (username, password), fetch=True)
+        if user:
+            st.session_state.user_id = user[0][0]
+            st.session_state.username = user[0][1]
+            st.session_state.is_admin = user[0][2]
+            st.rerun()
+        else:
+            st.error("Kullanıcı adı veya şifre hatalı!")
 else:
     # --- ANA UYGULAMA ---
     st.sidebar.title(f"Hoş geldiniz, {st.session_state.username}")
     if st.sidebar.button("Çıkış Yap"):
         st.session_state.user_id = None
         st.session_state.username = None
+        st.session_state.is_admin = 0
         st.rerun()
         
+    # YÖNETİCİ PANELİ (Sadece Admin yeni müteahhit hesabı açabilir)
+    if st.session_state.is_admin == 1:
+        with st.sidebar.expander("🛠️ Yönetici: Yeni Müteahhit Ekle"):
+            new_m_user = st.text_input("Müteahhit Kullanıcı Adı", key="new_m_user")
+            new_m_pass = st.text_input("Müteahhit Şifresi", type="password", key="new_m_pass")
+            if st.button("Müteahhit Hesabı Oluştur"):
+                if new_m_user and new_m_pass:
+                    try:
+                        run_query("INSERT INTO users (username, password, is_admin) VALUES (?, ?, 0)", (new_m_user, new_m_pass))
+                        st.success(f"'{new_m_user}' hesabı oluşturuldu!")
+                    except:
+                        st.error("Bu kullanıcı adı zaten kullanımda.")
+                else:
+                    st.warning("Lütfen kullanıcı adı ve şifre girin.")
+
     st.sidebar.header("Proje Yönetimi")
     projects = run_query("SELECT id, name FROM projects WHERE user_id = ?", (st.session_state.user_id,), fetch=True)
     project_dict = {p[1]: p[0] for p in projects}
