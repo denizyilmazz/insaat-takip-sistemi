@@ -2,6 +2,11 @@ import sqlite3
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import os
+
+# --- UPLOAD KLASÖRÜ OLUŞTUR ---
+if not os.path.exists("uploads"):
+    os.makedirs("uploads")
 
 # --- VERİTABANI VE AKILLI GÜNCELLEME İŞLEMLERİ ---
 def init_db():
@@ -56,7 +61,7 @@ def init_db():
         )
     ''')
     
-    # Ev Sahipleri / Müşteriler tablosu
+    # Ev Sahipleri / Müşteriler tablosu (Sözleşme dosya yolu eklendi)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS customers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,7 +72,8 @@ def init_db():
             daire TEXT,
             description TEXT,
             total_price REAL,
-            sale_date TEXT
+            sale_date TEXT,
+            contract_file_path TEXT
         )
     ''')
     cursor.execute("PRAGMA table_info(customers)")
@@ -82,6 +88,8 @@ def init_db():
         cursor.execute("ALTER TABLE customers ADD COLUMN description TEXT")
     if "sale_date" not in cust_cols:
         cursor.execute("ALTER TABLE customers ADD COLUMN sale_date TEXT")
+    if "contract_file_path" not in cust_cols:
+        cursor.execute("ALTER TABLE customers ADD COLUMN contract_file_path TEXT")
     
     # Müşteri Ödemeleri
     cursor.execute('''
@@ -124,12 +132,11 @@ def init_db():
         )
     ''')
     
-    # Varsayılan yönetici hesabı yoksa oluştur (Kullanıcı adı: admin, Şifre: 12345)
+    # Varsayılan yönetici hesabı yoksa oluştur
     cursor.execute("SELECT COUNT(*) FROM users")
     if cursor.fetchone()[0] == 0:
         cursor.execute("INSERT INTO users (username, password, is_admin) VALUES (?, ?, ?)", ("admin", "12345", 1))
         
-    # Varsayılan davet kodu yoksa oluştur
     cursor.execute("SELECT value FROM settings WHERE key = 'invite_code'")
     if not cursor.fetchone():
         cursor.execute("INSERT INTO settings (key, value) VALUES ('invite_code', 'santiye2026')")
@@ -302,7 +309,6 @@ else:
                         st.warning("Proje adı boş olamaz.")
             
             if st.button("Bu Projeyi Tamamen Sil", type="primary"):
-                # İlişkili tüm verileri temizle
                 custs = run_query("SELECT id FROM customers WHERE project_id = ?", (project_id,), fetch=True)
                 for c in custs:
                     run_query("DELETE FROM customer_payments WHERE customer_id = ?", (c[0],))
@@ -359,15 +365,23 @@ else:
                 c_date = col6.date_input("Satış / Sözleşme Tarihi", datetime.now())
                 c_desc = col7.text_area("Açıklama / Notlar", placeholder="Örn: Kapora alındı, tapu aşamasında...")
                 
+                c_file = st.file_uploader("Sözleşme Belgesi Yükle (PDF, Fotoğraf / Kamera)", type=["pdf", "png", "jpg", "jpeg"])
+                
                 submit_c = st.form_submit_button("Ev Sahibi Ekle")
                 if submit_c and c_name:
-                    run_query("INSERT INTO customers (project_id, name, blok, kat, daire, description, total_price, sale_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", 
-                              (project_id, c_name, c_blok, c_kat, c_daire, c_desc, c_price, str(c_date)))
-                    st.success("Ev sahibi eklendi!")
+                    file_path = None
+                    if c_file is not None:
+                        file_path = os.path.join("uploads", f"{int(datetime.now().timestamp())}_{c_file.name}")
+                        with open(file_path, "wb") as f:
+                            f.write(c_file.getbuffer())
+                            
+                    run_query("INSERT INTO customers (project_id, name, blok, kat, daire, description, total_price, sale_date, contract_file_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", 
+                              (project_id, c_name, c_blok, c_kat, c_daire, c_desc, c_price, str(c_date), file_path))
+                    st.success("Ev sahibi ve sözleşme eklendi!")
                     st.rerun()
                     
             st.divider()
-            customers = run_query("SELECT id, name, blok, kat, daire, description, total_price, sale_date FROM customers WHERE project_id = ?", (project_id,), fetch=True)
+            customers = run_query("SELECT id, name, blok, kat, daire, description, total_price, sale_date, contract_file_path FROM customers WHERE project_id = ?", (project_id,), fetch=True)
             
             if customers:
                 customer_dict = {f"{c[1]} (Blok: {c[2]} | Kat: {c[3]} | Daire: {c[4]})": c[0] for c in customers}
@@ -378,39 +392,53 @@ else:
                 total_price = c_info[6]
                 c_description = c_info[5]
                 c_sale_date = c_info[7]
+                c_contract_path = c_info[8]
                 
                 if c_sale_date:
                     st.write(f"📅 **Sözleşme / Satış Tarihi:** {c_sale_date}")
                 if c_description:
                     st.info(f"📝 **Not / Açıklama:** {c_description}")
+                    
+                # Sözleşme Belgesi Gösterimi
+                if c_contract_path and os.path.exists(c_contract_path):
+                    st.write("📄 **Yüklenen Sözleşme Belgesi:**")
+                    if c_contract_path.lower().endswith(('.png', '.jpg', '.jpeg')):
+                        st.image(c_contract_path, caption="Sözleşme Görseli", use_column_width=True)
+                    with open(c_contract_path, "rb") as file_download:
+                        st.download_button(
+                            label="Sözleşmeyi İndir / Görüntüle",
+                            data=file_download,
+                            file_name=os.path.basename(c_contract_path),
+                            mime="application/octet-stream"
+                        )
                 
                 payments = run_query("SELECT SUM(amount) FROM customer_payments WHERE customer_id = ?", (cust_id,), fetch=True)[0][0] or 0.0
                 remaining_debt = total_price - payments
                 
                 col_a, col_b, col_c = st.columns(3)
                 col_a.metric("Toplam Satış Bedeli", f"{total_price:,.2f} TL")
-                col_b.metric("Ödenen Toplam", f"{payments:,.2f} TL")
+                col_b.metric("Ödenen Toplam (Taksitler)", f"{payments:,.2f} TL")
                 col_c.metric("Kalan Borç", f"{remaining_debt:,.2f} TL", delta_color="inverse")
                 
-                st.text("Ödeme Girişi Yap")
+                st.text("Taksit / Ödeme Girişi Yap")
                 with st.form("pay_form"):
                     p_date = st.date_input("Ödeme Tarihi", datetime.now())
                     p_amount = st.number_input("Ödeme Miktarı (TL)", min_value=0.0, step=500.0)
-                    p_desc = st.text_input("Açıklama (Örn: Elden kapora, Banka havalesi vb.)")
+                    p_desc = st.text_input("Açıklama (Örn: 1. Taksit, Kapora, Banka havalesi vb.)")
                     sub_p = st.form_submit_button("Ödemeyi Kaydet")
                     if sub_p and p_amount > 0:
                         run_query("INSERT INTO customer_payments (customer_id, date, amount, description) VALUES (?, ?, ?, ?)",
                                   (cust_id, str(p_date), p_amount, p_desc))
-                        st.success("Ödeme kaydedildi!")
+                        st.success("Ödeme (taksit) kaydedildi!")
                         st.rerun()
                         
-                st.text("Geçmiş Ödemeler")
+                st.text("Geçmiş Taksitler ve Ödemeler")
                 pay_history = run_query("SELECT date, amount, description FROM customer_payments WHERE customer_id = ?", (cust_id,), fetch=True)
                 if pay_history:
                     df_pay = pd.DataFrame(pay_history, columns=["Tarih", "Tutar (TL)", "Açıklama"])
                     st.dataframe(df_pay, use_container_width=True)
                 else:
-                    st.info("Henüz ödeme girişi yapılmamış.")
+                    st.info("Henüz ödeme veya taksit girişi yapılmamış.")
 
         # --- USTALAR / TAŞERONLAR SEKMESİ ---
         with tab_tradesmen:
@@ -521,7 +549,7 @@ else:
             with col1:
                 st.markdown("### 💰 Gelir & Tahsilat Durumu")
                 st.metric("Toplam Satış Sözleşme Bedeli", f"{total_sales_value:,.2f} TL")
-                st.metric("Kasaya Giren (Tahsil Edilen)", f"{total_collected:,.2f} TL")
+                st.metric("Kasaya Giren (Tahsil Edilen)", f"{total_sales_value - total_receivable:,.2f} TL")
                 st.metric("Ev Sahiplerinden Kalan Alacak", f"{total_receivable:,.2f} TL")
                 
             with col2:
