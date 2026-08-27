@@ -281,15 +281,49 @@ else:
     projects = run_query("SELECT id, name, total_apartments FROM projects WHERE user_id = ?", (st.session_state.user_id,), fetch=True)
     project_dict = {p[1]: p[0] for p in projects}
     
-    selected_project_name = st.sidebar.selectbox("Aktif Projeyi Seçin", list(project_dict.keys()) if project_dict else ["Proje Yok"])
+    if project_dict:
+        selected_project_name = st.sidebar.selectbox("Aktif Projeyi Seçin", list(project_dict.keys()))
+        project_id = project_dict[selected_project_name]
+        
+        # PROJE DÜZENLE / SİL PANELİ
+        with st.sidebar.expander("⚙️ Projeyi Düzenle / Sil"):
+            with st.form("edit_project_form"):
+                current_proj_info = run_query("SELECT name, total_apartments FROM projects WHERE id = ?", (project_id,), fetch=True)[0]
+                edit_name = st.text_input("Proje Adı", value=current_proj_info[0])
+                edit_aps = st.number_input("Toplam Daire Sayısı", min_value=1, value=int(current_proj_info[1]) if current_proj_info[1] else 12, step=1)
+                submit_edit = st.form_submit_button("Projeyi Güncelle")
+                
+                if submit_edit:
+                    if edit_name:
+                        run_query("UPDATE projects SET name = ?, total_apartments = ? WHERE id = ?", (edit_name, edit_aps, project_id))
+                        st.success("Proje güncellendi!")
+                        st.rerun()
+                    else:
+                        st.warning("Proje adı boş olamaz.")
+            
+            if st.button("Bu Projeyi Tamamen Sil", type="primary"):
+                # İlişkili tüm verileri temizle
+                custs = run_query("SELECT id FROM customers WHERE project_id = ?", (project_id,), fetch=True)
+                for c in custs:
+                    run_query("DELETE FROM customer_payments WHERE customer_id = ?", (c[0],))
+                run_query("DELETE FROM customers WHERE project_id = ?", (project_id,))
+                
+                trades = run_query("SELECT id FROM tradesmen WHERE project_id = ?", (project_id,), fetch=True)
+                for t in trades:
+                    run_query("DELETE FROM tradesman_transactions WHERE tradesman_id = ?", (t[0],))
+                run_query("DELETE FROM tradesmen WHERE project_id = ?", (project_id,))
+                
+                run_query("DELETE FROM project_floors WHERE project_id = ?", (project_id,))
+                run_query("DELETE FROM projects WHERE id = ?", (project_id,))
+                st.success("Proje silindi!")
+                st.rerun()
+    else:
+        selected_project_name = st.sidebar.selectbox("Aktif Projeyi Seçin", ["Proje Yok"])
     
     with st.sidebar.expander("➕ Yeni Proje Ekle"):
         with st.form("new_project_form"):
             new_proj_name = st.text_input("Proje Adı (Örn: Moda Rezidans)")
             total_aps = st.number_input("Toplam Daire Sayısı", min_value=1, value=12, step=1)
-            
-            use_floor_pricing = st.checkbox("Kat Bazlı Fiyat Planı Oluştur")
-            num_floors = st.number_input("Kat Sayısı", min_value=1, value=4, step=1)
             
             submit_proj = st.form_submit_button("Proje Oluştur")
             if submit_proj:
