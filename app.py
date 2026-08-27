@@ -18,6 +18,66 @@ def tr_to_en(text):
         text = text.replace(k, v)
     return text
 
+# --- PROFESYONEL PDF SÖZLEŞME NÜSHASI OLUŞTURUCU ---
+def generate_contract_pdf(project_name, name, blok, kat, daire, total_price, paid, remaining, sdate, desc, plans):
+    pdf = FPDF()
+    pdf.add_page()
+    
+    # Başlık
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(0, 10, tr_to_en("SANTIYE VE CARI TAKIP SISTEMI"), 0, 1, "C")
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 6, tr_to_en("SOZLESME VE ODEME NUSHASI"), 0, 1, "C")
+    pdf.ln(5)
+    
+    # Proje ve Tarih Bilgisi
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.cell(0, 6, tr_to_en(f"Proje Adi: {project_name}"), 0, 1)
+    pdf.cell(0, 6, tr_to_en(f"Rapor Tarihi: {datetime.now().strftime('%Y-%m-%d')}"), 0, 1)
+    pdf.ln(3)
+    
+    # Müşteri ve Gayrimenkul Bilgileri Kutusu
+    pdf.set_fill_color(240, 240, 240)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(0, 7, tr_to_en("  Musteri ve Gayrimenkul Bilgileri"), 1, 1, "L", True)
+    
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(95, 6, tr_to_en(f" Ev Sahibi: {name}"), 1, 0, "L")
+    pdf.cell(95, 6, tr_to_en(f" Sozlesme Tarihi: {sdate or '-'}"), 1, 1, "L")
+    pdf.cell(95, 6, tr_to_en(f" Blok: {blok or '-'} | Kat: {kat or '-'} | Daire: {daire or '-'}"), 1, 0, "L")
+    pdf.cell(95, 6, tr_to_en(f" Toplam Satis Bedeli: {total_price:,.2f} TL"), 1, 1, "L")
+    pdf.cell(95, 6, tr_to_en(f" Odenen Toplam: {paid:,.2f} TL"), 1, 0, "L")
+    pdf.cell(95, 6, tr_to_en(f" Kalan Borc: {remaining:,.2f} TL"), 1, 1, "L")
+    if desc:
+        pdf.cell(190, 6, tr_to_en(f" Notlar / Aciklama: {desc}"), 1, 1, "L")
+    pdf.ln(6)
+    
+    # Taksit Tablosu Başlığı
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(0, 7, tr_to_en("  Taksit ve Odeme Plani Tablosu"), 1, 1, "L", True)
+    
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_fill_color(230, 230, 230)
+    pdf.cell(50, 6, tr_to_en("Taksit Adi"), 1, 0, "C", True)
+    pdf.cell(30, 6, tr_to_en("Tutar (TL)"), 1, 0, "C", True)
+    pdf.cell(30, 6, tr_to_en("Vade / Tarih"), 1, 0, "C", True)
+    pdf.cell(80, 6, tr_to_en("Odeme Durumu ve Yontemi"), 1, 1, "C", True)
+    
+    pdf.set_font("Helvetica", "", 9)
+    for p in plans:
+        p_name, p_amt, p_due, p_is_paid, p_pdate, p_pmeth = p
+        if p_is_paid == 1:
+            status_text = f"Odendi ({p_pdate} - {p_pmeth or '-'})"
+        else:
+            status_text = f"Odenmedi (Vade: {p_due})"
+        
+        pdf.cell(50, 6, tr_to_en(str(p_name)), 1, 0, "L")
+        pdf.cell(30, 6, tr_to_en(f"{p_amt:,.2f}"), 1, 0, "R")
+        pdf.cell(30, 6, tr_to_en(str(p_due)), 1, 0, "C")
+        pdf.cell(80, 6, tr_to_en(status_text), 1, 1, "L")
+        
+    return pdf.output(dest='S').encode('latin1')
+
 # --- VERİTABANI VE AKILLI GÜNCELLEME İŞLEMLERİ ---
 def init_db():
     conn = sqlite3.connect("insaat_takip.db", check_same_thread=False)
@@ -391,7 +451,7 @@ else:
             all_custs_master = run_query("SELECT id, name, blok, kat, daire, total_price, sale_date, description FROM customers WHERE project_id = ?", (project_id,), fetch=True)
             if all_custs_master:
                 st.markdown("### 📋 Proje Ev Sahipleri Sözleşme Nüshaları ve Cari Dökümleri")
-                st.info("💡 Aşağıdaki alanlarda her ev sahibinin sözleşme bilgileri, tüm ödenmiş taksitleri (tarihleri ve yöntemleriyle) ve ödenecek bütün gelecek taksitleri bir sözleşme nüshası formatında listelenmektedir.")
+                st.info("💡 Aşağıdaki alanlarda her ev sahibinin sözleşme bilgileri, tüm ödenmiş taksitleri ve ödenecek bütün gelecek taksitleri bir sözleşme nüshası formatında listelenmektedir. Dilerseniz her birinin **profesyonel PDF çıktısını** alabilirsiniz.")
                 
                 for mc in all_custs_master:
                     mc_id, mc_name, mc_blok, mc_kat, mc_daire, mc_tp, mc_sdate, mc_desc = mc
@@ -423,6 +483,16 @@ else:
                                     "Durum": status_str
                                 })
                             st.dataframe(pd.DataFrame(plan_rows), use_container_width=True)
+                            
+                            # PROFESYONEL PDF İNDİRME BUTONU
+                            pdf_bytes = generate_contract_pdf(selected_project_name, mc_name, mc_blok, mc_kat, mc_daire, mc_tp, mc_paid, mc_rem, mc_sdate, mc_desc, mc_plans)
+                            st.download_button(
+                                label=f"📄 {mc_name} - Sözleşme Nüshasını PDF İndir",
+                                data=pdf_bytes,
+                                file_name=f"{mc_name}_sozlesme_nushasi.pdf",
+                                mime="application/pdf",
+                                key=f"pdf_download_{mc_id}"
+                            )
                         else:
                             st.info("Bu ev sahibi için tanımlanmış taksit planı bulunmuyor.")
                 st.divider()
@@ -524,42 +594,6 @@ else:
                 col_b.metric("Ödenen Toplam", f"{total_paid:,.2f} TL")
                 col_c.metric("Kalan Borç", f"{remaining_debt:,.2f} TL", delta_color="inverse")
                 
-                # --- PDF ÇIKTISI ALMA ---
-                pdf_btn_col1, _ = st.columns([2, 4])
-                with pdf_btn_col1:
-                    if st.button("📄 Bu Müşterinin Raporunu PDF İndir"):
-                        try:
-                            pdf = FPDF()
-                            pdf.add_page()
-                            pdf.set_font("Helvetica", "B", 14)
-                            pdf.cell(0, 10, tr_to_en(f"Musteri Sozlesme ve Odeme Nushasi"), 0, 1, "C")
-                            pdf.set_font("Helvetica", "", 10)
-                            pdf.cell(0, 6, tr_to_en(f"Proje: {selected_project_name}"), 0, 1)
-                            pdf.cell(0, 6, tr_to_en(f"Ev Sahibi: {c_name_val}"), 0, 1)
-                            pdf.cell(0, 6, tr_to_en(f"Konum: Blok: {c_blok_val or '-'} | Kat: {c_kat_val or '-'} | Daire: {c_daire_val or '-'}"), 0, 1)
-                            pdf.cell(0, 6, tr_to_en(f"Toplam Satis Bedeli: {total_price:,.2f} TL"), 0, 1)
-                            pdf.cell(0, 6, tr_to_en(f"Odenen Toplam: {total_paid:,.2f} TL"), 0, 1)
-                            pdf.cell(0, 6, tr_to_en(f"Kalan Borc: {remaining_debt:,.2f} TL"), 0, 1)
-                            pdf.ln(4)
-                            
-                            pdf.set_font("Helvetica", "B", 11)
-                            pdf.cell(0, 6, tr_to_en("Taksit ve Odeme Nushasi Tablosu:"), 0, 1)
-                            pdf.set_font("Helvetica", "", 9)
-                            for p in payment_plans:
-                                status_str = f"Odendi ({p[5]} - {p[6] or '-'})" if p[4] == 1 else f"Odenmedi (Vade: {p[3]})"
-                                pdf.cell(0, 5, tr_to_en(f"- {p[1]}: {p[2]:,.2f} TL | {status_str}"), 0, 1)
-                                
-                            pdf_output = pdf.output(dest='S').encode('latin1')
-                            st.download_button(
-                                label="📥 PDF İndirmeye Hazır (Tıkla)",
-                                data=pdf_output,
-                                file_name=f"{c_name_val}_sozlesme_nushasi.pdf",
-                                mime="application/pdf",
-                                key="download_pdf_final"
-                            )
-                        except Exception as e:
-                            st.error(f"PDF oluşturulurken hata oluştu: {e}")
-
                 st.divider()
                 
                 # --- 3. TEK BİRLEŞİK TABLO & ÖDEME AL & VADE UYARISI ---
