@@ -1,7 +1,7 @@
 import sqlite3
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, date
 import os
 
 # --- UPLOAD KLASÖRÜ ---
@@ -90,7 +90,18 @@ def init_db():
     if "contract_file_path" not in cust_cols:
         cursor.execute("ALTER TABLE customers ADD COLUMN contract_file_path TEXT")
     
-    # Müşteri Ödemeleri tablosu (Ödeme yöntemi ve dekont eklendi)
+    # Müşteri Ödeme Planı (Taksitler ve Vade Tarihleri) tablosu
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS customer_payment_plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_id INTEGER,
+            installment_name TEXT,
+            amount REAL,
+            due_date TEXT
+        )
+    ''')
+    
+    # Müşteri Ödemeleri tablosu
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS customer_payments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,7 +120,7 @@ def init_db():
     if "receipt_file_path" not in cp_cols:
         cursor.execute("ALTER TABLE customer_payments ADD COLUMN receipt_file_path TEXT")
     
-    # Ustalar / Taşeronlar tablosu (Sözleşme/teklif belgesi eklendi)
+    # Ustalar / Taşeronlar tablosu
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS tradesmen (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -130,7 +141,7 @@ def init_db():
     if "contract_file_path" not in trade_cols:
         cursor.execute("ALTER TABLE tradesmen ADD COLUMN contract_file_path TEXT")
     
-    # Usta İşlemleri tablosu (Ödeme yöntemi ve fatura/dekont belgesi eklendi)
+    # Usta İşlemleri tablosu
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS tradesman_transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -330,6 +341,7 @@ else:
                 custs = run_query("SELECT id FROM customers WHERE project_id = ?", (project_id,), fetch=True)
                 for c in custs:
                     run_query("DELETE FROM customer_payments WHERE customer_id = ?", (c[0],))
+                    run_query("DELETE FROM customer_payment_plans WHERE customer_id = ?", (c[0],))
                 run_query("DELETE FROM customers WHERE project_id = ?", (project_id,))
                 
                 trades = run_query("SELECT id FROM tradesmen WHERE project_id = ?", (project_id,), fetch=True)
@@ -369,7 +381,7 @@ else:
         
         # --- EV SAHİPLERİ SEKMESİ ---
         with tab_homeowners:
-            st.subheader("Ev Sahipleri ve Kalan Borç Takibi")
+            st.subheader("Ev Sahipleri, Ödeme Planı ve Kalan Borç Takibi")
             
             with st.form("new_customer"):
                 col1, col2, col3, col4 = st.columns(4)
@@ -430,79 +442,135 @@ else:
                                 key="down_c_contract"
                             )
                 
-                payments = run_query("SELECT SUM(amount) FROM customer_payments WHERE customer_id = ?", (cust_id,), fetch=True)[0][0] or 0.0
-                remaining_debt = total_price - payments
+                # --- VADE & GECİKME KONTROLÜ (ÖDEME PLANI UYARISI) ---
+                total_paid = run_query("SELECT SUM(amount) FROM customer_payments WHERE customer_id = ?", (cust_id,), fetch=True)[0][0] or 0.0
+                payment_plans = run_query("SELECT id, installment_name, amount, due_date FROM customer_payment_plans WHERE customer_id = ? ORDER BY due_date ASC", (cust_id,), fetch=True)
+                
+                today_date = date.today()
+                overdue_found = False
+                cumulative_plan = 0
+                
+                for plan in payment_plans:
+                    p_id, p_name, p_amt, p_due = plan
+                    try:
+                        p_due_date = datetime.strptime(p_due, "%Y-%m-%d").date()
+                    except:
+                        continue
+                    cumulative_plan += p_amt
+                    # Eğer vade tarihi bugünden küçükse ve toplam ödenen tutar bu birikmiş plana yetmiyorsa
+                    if p_due_date < today_date and total_paid < cumulative_plan:
+                        overdue_found = True
+                        st.error(f"⚠️ **Vadesi Geçmiş Ödeme Uyarısı:** `{p_name}` ({p_amt:,.2f} TL) vadesi **{p_due}** tarihinde dolmuş ancak henüz ödenmemiştir!")
+
+                remaining_debt = total_price - total_paid
                 
                 col_a, col_b, col_c = st.columns(3)
                 col_a.metric("Toplam Satış Bedeli", f"{total_price:,.2f} TL")
-                col_b.metric("Ödenen Toplam (Taksitler)", f"{payments:,.2f} TL")
+                col_b.metric("Ödenen Toplam", f"{total_paid:,.2f} TL")
                 col_c.metric("Kalan Borç", f"{remaining_debt:,.2f} TL", delta_color="inverse")
                 
-                st.markdown("#### 💳 Taksit / Ödeme Girişi")
-                with st.form("pay_form"):
-                    col_p1, col_p2, col_p3 = st.columns(3)
-                    p_date = col_p1.date_input("Ödeme Tarihi", datetime.now())
-                    p_amount = col_p2.number_input("Ödeme Miktarı (TL)", min_value=0.0, step=500.0)
-                    p_method = col_p3.selectbox("Ödeme Yöntemi", ["Banka Havalesi / EFT", "Elden Nakit", "Çek / Senet", "Kredi Kartı", "Diğer"])
-                    
-                    col_p4, col_p5 = st.columns(2)
-                    p_desc = col_p4.text_input("Açıklama (Örn: 1. Taksit, Kapora, Ara Ödeme)")
-                    p_receipt = col_p5.file_uploader("Dekont / Makbuz Yükle (PDF, Fotoğraf)", type=["pdf", "png", "jpg", "jpeg"])
-                    
-                    sub_p = st.form_submit_button("Ödemeyi Kaydet")
-                    if sub_p and p_amount > 0:
-                        receipt_path = None
-                        if p_receipt is not None:
-                            receipt_path = os.path.join("uploads", f"rec_{int(datetime.now().timestamp())}_{p_receipt.name}")
-                            with open(receipt_path, "wb") as f:
-                                f.write(p_receipt.getbuffer())
-                                
-                        run_query("INSERT INTO customer_payments (customer_id, date, amount, payment_method, description, receipt_file_path) VALUES (?, ?, ?, ?, ?, ?)",
-                                  (cust_id, str(p_date), p_amount, p_method, p_desc, receipt_path))
-                        st.success("Ödeme (taksit) ve dekont kaydedildi!")
-                        st.rerun()
+                # --- ALT SEKMELER: ÖDEME PLANI VE ÖDEME GİRİŞİ ---
+                sub_tab1, sub_tab2 = st.tabs(["📅 Taksit / Ödeme Planı (Vade Takibi)", "💳 Ödeme Yap / Dekont Yükle"])
+                
+                with sub_tab1:
+                    st.markdown("#### Müşteri Ödeme ve Taksit Planı Belirle")
+                    with st.form("payment_plan_form"):
+                        col_pl1, col_pl2, col_pl3 = st.columns(3)
+                        pl_name = col_pl1.text_input("Taksit Adı (Örn: Peşinat, 1. Taksit, Ara Ödeme)")
+                        pl_amount = col_pl2.number_input("Planlanan Tutar (TL)", min_value=0.0, step=500.0)
+                        pl_date = col_pl3.date_input("Vade Tarihi", datetime.now())
                         
-                st.markdown("#### 📜 Geçmiş Taksitler ve Ödemeler")
-                pay_history = run_query("SELECT id, date, amount, payment_method, description, receipt_file_path FROM customer_payments WHERE customer_id = ?", (cust_id,), fetch=True)
-                if pay_history:
-                    # Tablo gösterimi
-                    table_data = [[p[1], f"{p[2]:,.2f} TL", p[3] or "-", p[4] or "-", "✅ Var" if p[5] else "Yok"] for p in pay_history]
-                    df_pay = pd.DataFrame(table_data, columns=["Tarih", "Tutar", "Ödeme Yöntemi", "Açıklama", "Dekont"])
-                    st.dataframe(df_pay, use_container_width=True)
-                    
-                    # Dekontları indirme / görüntüleme alanı
-                    receipt_list = [p for p in pay_history if p[5] and os.path.exists(p[5])]
-                    if receipt_list:
-                        with st.expander("📎 Kayıtlı Dekontları İncele / İndir"):
-                            for rec in receipt_list:
-                                r_id, r_date, r_amt, r_meth, r_desc, r_path = rec
-                                st.write(f"**Tarih:** {r_date} | **Tutar:** {r_amt:,.2f} TL ({r_meth})")
-                                if r_path.lower().endswith(('.png', '.jpg', '.jpeg')):
-                                    st.image(r_path, width=250)
-                                with open(r_path, "rb") as rf:
-                                    st.download_button(
-                                        label=f"📥 Dekontu İndir ({os.path.basename(r_path)})",
-                                        data=rf,
-                                        file_name=os.path.basename(r_path),
-                                        mime="application/octet-stream",
-                                        key=f"down_rec_{r_id}"
-                                    )
-                                st.divider()
-                else:
-                    st.info("Henüz ödeme veya taksit girişi yapılmamış.")
+                        submit_plan = st.form_submit_button("Plana Taksit Ekle")
+                        if submit_plan and pl_name and pl_amount > 0:
+                            run_query("INSERT INTO customer_payment_plans (customer_id, installment_name, amount, due_date) VALUES (?, ?, ?, ?)",
+                                      (cust_id, pl_name, pl_amount, str(pl_date)))
+                            st.success("Taksit vade planına eklendi!")
+                            st.rerun()
+                            
+                    st.markdown("#### Belirlenen Taksit Planı Listesi")
+                    if payment_plans:
+                        plan_table_data = []
+                        for p in payment_plans:
+                            p_id, p_name, p_amt, p_due = p
+                            status = "Bekliyor"
+                            try:
+                                d_date = datetime.strptime(p_due, "%Y-%m-%d").date()
+                                if d_date < today_date and total_paid < p_amt:
+                                    status = "⚠️ Vadesi Geçti!"
+                                elif total_paid >= p_amt:
+                                    status = "✅ Ödendi"
+                            except:
+                                pass
+                            plan_table_data.append([p_name, f"{p_amt:,.2f} TL", p_due, status])
+                        
+                        df_plan = pd.DataFrame(plan_table_data, columns=["Taksit Adı", "Tutar", "Vade Tarihi", "Durum"])
+                        st.dataframe(df_plan, use_container_width=True)
+                    else:
+                        st.info("Bu müşteri için henüz bir taksit planı girilmemiş.")
+
+                with sub_tab2:
+                    st.markdown("#### Ödeme Al / Taksit Tahsil Et")
+                    with st.form("pay_form"):
+                        col_p1, col_p2, col_p3 = st.columns(3)
+                        p_date = col_p1.date_input("Ödeme Tarihi", datetime.now())
+                        p_amount = col_p2.number_input("Ödeme Miktarı (TL)", min_value=0.0, step=500.0)
+                        p_method = col_p3.selectbox("Ödeme Yöntemi", ["Banka Havalesi / EFT", "Elden Nakit", "Çek / Senet", "Kredi Kartı", "Diğer"])
+                        
+                        col_p4, col_p5 = st.columns(2)
+                        p_desc = col_p4.text_input("Açıklama (Örn: 1. Taksit ödemesi)")
+                        p_receipt = col_p5.file_uploader("Dekont / Makbuz Yükle (PDF, Fotoğraf)", type=["pdf", "png", "jpg", "jpeg"])
+                        
+                        sub_p = st.form_submit_button("Tahsilatı Kaydet")
+                        if sub_p and p_amount > 0:
+                            receipt_path = None
+                            if p_receipt is not None:
+                                receipt_path = os.path.join("uploads", f"rec_{int(datetime.now().timestamp())}_{p_receipt.name}")
+                                with open(receipt_path, "wb") as f:
+                                    f.write(p_receipt.getbuffer())
+                                    
+                            run_query("INSERT INTO customer_payments (customer_id, date, amount, payment_method, description, receipt_file_path) VALUES (?, ?, ?, ?, ?, ?)",
+                                      (cust_id, str(p_date), p_amount, p_method, p_desc, receipt_path))
+                            st.success("Ödeme ve dekont kaydedildi!")
+                            st.rerun()
+                            
+                    st.markdown("#### Geçmiş Ödemeler ve Dekontlar")
+                    pay_history = run_query("SELECT id, date, amount, payment_method, description, receipt_file_path FROM customer_payments WHERE customer_id = ?", (cust_id,), fetch=True)
+                    if pay_history:
+                        table_data = [[p[1], f"{p[2]:,.2f} TL", p[3] or "-", p[4] or "-", "✅ Var" if p[5] else "Yok"] for p in pay_history]
+                        df_pay = pd.DataFrame(table_data, columns=["Tarih", "Tutar", "Ödeme Yöntemi", "Açıklama", "Dekont"])
+                        st.dataframe(df_pay, use_container_width=True)
+                        
+                        receipt_list = [p for p in pay_history if p[5] and os.path.exists(p[5])]
+                        if receipt_list:
+                            with st.expander("📎 Kayıtlı Dekontları İncele / İndir"):
+                                for rec in receipt_list:
+                                    r_id, r_date, r_amt, r_meth, r_desc, r_path = rec
+                                    st.write(f"**Tarih:** {r_date} | **Tutar:** {r_amt:,.2f} TL ({r_meth})")
+                                    if r_path.lower().endswith(('.png', '.jpg', '.jpeg')):
+                                        st.image(r_path, width=250)
+                                    with open(r_path, "rb") as rf:
+                                        st.download_button(
+                                            label=f"📥 Dekontu İndir ({os.path.basename(r_path)})",
+                                            data=rf,
+                                            file_name=os.path.basename(r_path),
+                                            mime="application/octet-stream",
+                                            key=f"down_rec_{r_id}"
+                                        )
+                                    st.divider()
+                    else:
+                        st.info("Henüz ödeme kaydı bulunmuyor.")
 
         # --- USTALAR / TAŞERONLAR SEKMESİ ---
         with tab_tradesmen:
-            st.subheader("Usta ve Taşeron Cari Takibi (Sıvacı, Kalıpçı vb.)")
+            st.subheader("Usta ve Taşeron Cari Takibi")
             
-            # Form dışı branş seçimi (Diğer seçildiğinde anında kutu açılması için)
             col_t1, col_t2 = st.columns(2)
             t_name = col_t1.text_input("Usta / Firma Adı (Örn: Ahmet Usta)", key="t_name_input")
             t_type_select = col_t2.selectbox("Usta Branşı", ["Sıvacı", "Kalıpçı", "Camcı", "Parkeci", "Elektrikçi", "Tesisatçı", "Demirci", "Mermerci", "Boyacı", "Çatıcı", "Diğer"], key="t_type_sel")
             
             custom_trade = ""
             if t_type_select == "Diğer":
-                custom_trade = st.text_input("Lütfen Usta Branşını Yazın (Örn: Asansörcü, İskeleci, Yalıtımcı)", key="custom_trade_input")
+                custom_trade = st.text_input("Lütfen Usta Branşını Yazın (Örn: Asansörcü, İskeleci)", key="custom_trade_input")
                 final_trade = custom_trade if custom_trade else "Diğer"
             else:
                 final_trade = t_type_select
@@ -510,8 +578,8 @@ else:
             with st.form("new_tradesman"):
                 col_t3, col_t4 = st.columns(2)
                 t_date = col_t3.date_input("Anlaşma / Başlangıç Tarihi", datetime.now(), key="t_start_date")
-                t_file = col_t4.file_uploader("Usta Sözleşmesi / Teklif Belgesi (PDF, Görsel)", type=["pdf", "png", "jpg", "jpeg"], key="t_contract_file")
-                t_desc = st.text_area("Usta / İş Açıklaması / Notlar", placeholder="Örn: 1. kat ince sıva işi komple anahtar teslim...")
+                t_file = col_t4.file_uploader("Usta Sözleşmesi / Teklif Belgesi", type=["pdf", "png", "jpg", "jpeg"], key="t_contract_file")
+                t_desc = st.text_area("Usta / İş Açıklaması / Notlar", placeholder="Örn: 1. kat ince sıva işi...")
                 
                 submit_t = st.form_submit_button("Usta Ekle")
                 if submit_t and t_name:
@@ -567,7 +635,6 @@ else:
                 col2.metric("Yapılan Ödemeler", f"{total_paid:,.2f} TL")
                 col3.metric("Kalan Bakiye (Ustaya Borç)", f"{remaining_balance:,.2f} TL")
                 
-                st.markdown("#### ➕ Yeni Hakediş / Ödeme Kaydı")
                 with st.form("t_trans_form"):
                     col_tr1, col_tr2, col_tr3 = st.columns(3)
                     ttype = col_tr1.selectbox("İşlem Türü", ["Hakediş (Borç)", "Ödeme"])
@@ -576,9 +643,9 @@ else:
                     
                     col_tr4, col_tr5 = st.columns(2)
                     t_method = col_tr4.selectbox("Ödeme Yöntemi / İşlem Kanalı", ["Banka Havalesi / EFT", "Elden Nakit", "Çek / Senet", "Fatura Karşılığı", "Diğer"])
-                    t_trans_file = col_tr5.file_uploader("Fatura / Dekont / Hakediş Belgesi (PDF, Görsel)", type=["pdf", "png", "jpg", "jpeg"], key="t_tr_file")
+                    t_trans_file = col_tr5.file_uploader("Fatura / Dekont / Hakediş Belgesi", type=["pdf", "png", "jpg", "jpeg"], key="t_tr_file")
                     
-                    t_desc_trans = st.text_input("Açıklama (Örn: 1. kat sıva hakedişi / Nakit avans / Malzeme bedeli)", key="t_desc_tr")
+                    t_desc_trans = st.text_input("Açıklama (Örn: 1. kat sıva hakedişi / Nakit avans)", key="t_desc_tr")
                     sub_tr = st.form_submit_button("İşlemi Kaydet")
                     
                     if sub_tr and t_amount > 0:
@@ -593,14 +660,13 @@ else:
                         st.success("İşlem eklendi!")
                         st.rerun()
                         
-                st.markdown("#### 📜 Cari Hesap Hareketleri")
+                st.text("Cari Hesap Hareketleri")
                 t_history = run_query("SELECT id, trans_type, date, amount, payment_method, description, doc_file_path FROM tradesman_transactions WHERE tradesman_id = ?", (t_id,), fetch=True)
                 if t_history:
                     table_tr_data = [[h[1], h[2], f"{h[3]:,.2f} TL", h[4] or "-", h[5] or "-", "✅ Var" if h[6] else "Yok"] for h in t_history]
                     df_t = pd.DataFrame(table_tr_data, columns=["İşlem Türü", "Tarih", "Tutar", "Ödeme Yöntemi", "Açıklama", "Belge"])
                     st.dataframe(df_t, use_container_width=True)
                     
-                    # Belgeleri indirme/inceleme alanı
                     tr_docs_list = [h for h in t_history if h[6] and os.path.exists(h[6])]
                     if tr_docs_list:
                         with st.expander("📎 Kayıtlı Fatura / Dekont / Belgeleri İncele"):
