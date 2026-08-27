@@ -3,10 +3,20 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, date
 import os
+from fpdf import FPDF
 
 # --- UPLOAD KLASÖRÜ ---
 if not os.path.exists("uploads"):
     os.makedirs("uploads")
+
+# --- TÜRKÇE KARAKTER DÖNÜŞÜCÜ (PDF İÇİN) ---
+def tr_to_en(text):
+    if not text:
+        return ""
+    tr_chars = {'ş':'s', 'Ş':'S', 'ğ':'g', 'Ğ':'G', 'ü':'u', 'Ü':'U', 'ö':'o', 'Ö':'O', 'ç':'c', 'Ç':'C', 'ı':'i', 'İ':'I'}
+    for k, v in tr_chars.items():
+        text = text.replace(k, v)
+    return text
 
 # --- VERİTABANI VE AKILLI GÜNCELLEME İŞLEMLERİ ---
 def init_db():
@@ -377,12 +387,36 @@ else:
         project_id = project_dict[selected_project_name]
         st.title(f"📍 Proje: {selected_project_name}")
         
-        tab_homeowners, tab_tradesmen, tab_summary = st.tabs(["🏠 Ev Sahipleri & Gelirler", "👷 Ustalar & Taşeronlar", "📊 Genel Durum & Kâr/Zarar"])
+        tab_homeowners, tab_tradesmen, tab_summary = st.tabs(["🏠 Ev Sahipleri & Excel Tablosu", "👷 Ustalar & Taşeronlar", "📊 Genel Durum & Kâr/Zarar"])
         
-        # --- EV SAHİPLERİ SEKMESİ ---
+        # --- EV SAHİPLERİ & EXCEL TABLOSU SEKMESİ ---
         with tab_homeowners:
-            st.subheader("Ev Sahipleri, Ödeme Planı ve Kalan Borç Takibi")
+            st.subheader("Ev Sahipleri Master Excel Tablosu ve Detaylı Taksit Takibi")
             
+            # --- 1. TÜM PROJE EV SAHİPLERİ EXCEL TABLOSU ÖZETİ ---
+            all_custs_master = run_query("SELECT id, name, blok, kat, daire, total_price, sale_date FROM customers WHERE project_id = ?", (project_id,), fetch=True)
+            if all_custs_master:
+                master_table_rows = []
+                for mc in all_custs_master:
+                    mc_id, mc_name, mc_blok, mc_kat, mc_daire, mc_tp, mc_sdate = mc
+                    mc_paid = run_query("SELECT SUM(amount) FROM customer_payments WHERE customer_id = ?", (mc_id,), fetch=True)[0][0] or 0.0
+                    mc_rem = mc_tp - mc_paid
+                    master_table_rows.append({
+                        "Ev Sahibi": mc_name,
+                        "Blok": mc_blok or "-",
+                        "Kat": mc_kat or "-",
+                        "Daire": mc_daire or "-",
+                        "Sözleşme Tarihi": mc_sdate or "-",
+                        "Toplam Satış (TL)": f"{mc_tp:,.2f}",
+                        "Ödenen (TL)": f"{mc_paid:,.2f}",
+                        "Kalan Borç (TL)": f"{mc_rem:,.2f}"
+                    })
+                df_master = pd.DataFrame(master_table_rows)
+                st.markdown("### 📋 Proje Ev Sahipleri Genel Cari Tablosu")
+                st.dataframe(df_master, use_container_width=True)
+                st.divider()
+
+            # --- 2. YENİ EV SAHİBİ EKLEME ---
             with st.form("new_customer"):
                 col1, col2, col3, col4 = st.columns(4)
                 c_name = col1.text_input("Ev Sahibi Adı Soyadı")
@@ -415,10 +449,14 @@ else:
             
             if customers:
                 customer_dict = {f"{c[1]} (Blok: {c[2]} | Kat: {c[3]} | Daire: {c[4]})": c[0] for c in customers}
-                selected_cust = st.selectbox("İşlem Yapılacak Ev Sahibini Seçin", list(customer_dict.keys()))
+                selected_cust = st.selectbox("İşlem Yapılacak Ev Sahibini Seçin (Detay & Taksit Tablosu)", list(customer_dict.keys()))
                 cust_id = customer_dict[selected_cust]
                 
                 c_info = [c for c in customers if c[0] == cust_id][0]
+                c_name_val = c_info[1]
+                c_blok_val = c_info[2]
+                c_kat_val = c_info[3]
+                c_daire_val = c_info[4]
                 total_price = c_info[6]
                 c_description = c_info[5]
                 c_sale_date = c_info[7]
@@ -466,12 +504,54 @@ else:
                 col_b.metric("Ödenen Toplam", f"{total_paid:,.2f} TL")
                 col_c.metric("Kalan Borç", f"{remaining_debt:,.2f} TL", delta_color="inverse")
                 
+                # --- PDF ÇIKTISI ALMA BUTONU ---
+                pay_history_pdf = run_query("SELECT date, amount, payment_method, description FROM customer_payments WHERE customer_id = ?", (cust_id,), fetch=True)
+                
+                pdf_btn_col1, pdf_btn_col2 = st.columns([2, 4])
+                with pdf_btn_col1:
+                    if st.button("📄 Bu Müşterinin Raporunu PDF İndir"):
+                        try:
+                            pdf = FPDF()
+                            pdf.add_page()
+                            pdf.set_font("Helvetica", "B", 14)
+                            pdf.cell(0, 10, tr_to_en(f"Musteri Cari ve Odeme Raporu"), 0, 1, "C")
+                            pdf.set_font("Helvetica", "", 10)
+                            pdf.cell(0, 6, tr_to_en(f"Proje: {selected_project_name}"), 0, 1)
+                            pdf.cell(0, 6, tr_to_en(f"Ev Sahibi: {c_name_val}"), 0, 1)
+                            pdf.cell(0, 6, tr_to_en(f"Konum: Blok: {c_blok_val or '-'} | Kat: {c_kat_val or '-'} | Daire: {c_daire_val or '-'}"), 0, 1)
+                            pdf.cell(0, 6, tr_to_en(f"Toplam Satis Bedeli: {total_price:,.2f} TL"), 0, 1)
+                            pdf.cell(0, 6, tr_to_en(f"Odenen Toplam: {total_paid:,.2f} TL"), 0, 1)
+                            pdf.cell(0, 6, tr_to_en(f"Kalan Borc: {remaining_debt:,.2f} TL"), 0, 1)
+                            pdf.ln(4)
+                            
+                            pdf.set_font("Helvetica", "B", 11)
+                            pdf.cell(0, 6, tr_to_en("Odeme Plani (Taksitler):"), 0, 1)
+                            pdf.set_font("Helvetica", "", 9)
+                            for p in payment_plans:
+                                pdf.cell(0, 5, tr_to_en(f"- {p[1]}: {p[2]:,.2f} TL (Vade: {p[3]})"), 0, 1)
+                            pdf.ln(4)
+                            
+                            pdf.set_font("Helvetica", "B", 11)
+                            pdf.cell(0, 6, tr_to_en("Yapilan Odemeler (Tahsilatlar):"), 0, 1)
+                            pdf.set_font("Helvetica", "", 9)
+                            for pay in pay_history_pdf:
+                                pdf.cell(0, 5, tr_to_en(f"- Tarih: {pay[0]} | Tutar: {pay[1]:,.2f} TL | Yontem: {pay[2] or '-'} | Aciklama: {pay[3] or '-'}"), 0, 1)
+                                
+                            pdf_output = pdf.output(dest='S').encode('latin1')
+                            st.download_button(
+                                label="📥 PDF İndirmeye Hazır (Tıkla)",
+                                data=pdf_output,
+                                file_name=f"{c_name_val}_cari_raporu.pdf",
+                                mime="application/pdf",
+                                key="download_pdf_final"
+                            )
+                        except Exception as e:
+                            st.error(f"PDF oluşturulurken hata oluştu: {e}")
+
                 st.divider()
                 
-                # --- DOĞRUDAN ALT ALTA SIRALI BÖLÜMLER ---
-                
-                # 1. BÖLÜM: ÖDEME PLANI (PEŞİNAT, 1. TAKSİT VB. ALT ALTA)
-                st.markdown("### 📅 Ödeme Planı (Taksitler ve Vadeler)")
+                # --- 3. SEÇİLEN KİŞİNİN DETAYLI EXCEL / TAKSİT TABLOSU ---
+                st.markdown(f"### 📊 {c_name_val} - Detaylı Taksit & Ödeme Tablosu")
                 
                 # Yeni Taksit Ekleme Formu
                 with st.form(f"plan_form_{cust_id}"):
@@ -487,27 +567,40 @@ else:
                         st.success("Taksit vade planına eklendi!")
                         st.rerun()
 
-                # Taksitleri Alt Alta Listeleme
+                # Taksitleri Excel Benzeri Tablo Olarak Göster
                 if payment_plans:
+                    plan_table_rows = []
+                    running_cumulative_plan = 0
                     for p in payment_plans:
                         p_id, p_name, p_amt, p_due = p
+                        running_cumulative_plan += p_amt
                         status_badge = "⏳ Bekliyor"
                         try:
                             d_date = datetime.strptime(p_due, "%Y-%m-%d").date()
-                            if d_date < today_date and total_paid < p_amt:
-                                status_badge = "🔴 Vadesi Geçti!"
-                            elif total_paid >= p_amt:
-                                status_badge = "🟢 Ödendi"
+                            if today_date < d_date:
+                                status_badge = "⏳ Bekliyor (Vadesi Gelmedi)"
+                            else:
+                                if total_paid >= running_cumulative_plan:
+                                    status_badge = "🟢 Ödendi"
+                                else:
+                                    status_badge = "🔴 Vadesi Geçti!"
                         except:
                             pass
                         
-                        st.info(f"📌 **{p_name}** | Tutar: **{p_amt:,.2f} TL** | Vade: **{p_due}** | Durum: **{status_badge}**")
+                        plan_table_rows.append({
+                            "Taksit Adı": p_name,
+                            "Planlanan Tutar (TL)": f"{p_amt:,.2f}",
+                            "Vade Tarihi": p_due,
+                            "Durum": status_badge
+                        })
+                    df_cust_plan = pd.DataFrame(plan_table_rows)
+                    st.dataframe(df_cust_plan, use_container_width=True)
                 else:
-                    st.info("Bu müşteri için henüz alt alta sıralı bir taksit planı girilmemiş.")
+                    st.info("Bu müşteri için henüz bir taksit planı girilmemiş.")
 
                 st.divider()
 
-                # 2. BÖLÜM: ÖDEME YAP / TAHSİLAT & DEKONT YÜKLE
+                # --- 4. ÖDEME YAP / TAHSİLAT & DEKONT GİRİŞİ ---
                 st.markdown("### 💳 Ödeme Al / Tahsilat Gir ve Dekont Yükle")
                 with st.form(f"pay_form_{cust_id}"):
                     col_p1, col_p2, col_p3 = st.columns(3)
@@ -724,7 +817,7 @@ else:
             estimated_profit = base_revenue - total_tradesman_debt
             
             st.divider()
-            col1, col2 = st.columns(2)
+            col1, col2 = this_cols = st.columns(2)
             
             with col1:
                 st.markdown("### 💰 Gelir & Tahsilat Durumu")
