@@ -5,8 +5,7 @@ from datetime import datetime
 
 # --- VERİTABANI İŞLEMLERİ ---
 def init_db():
-    # Veritabanı adını v2 yaparak tertemiz yeni bir başlangıç sağlıyoruz
-    conn = sqlite3.connect("insaat_takip_v2.db", check_same_thread=False)
+    conn = sqlite3.connect("insaat_takip_v4.db", check_same_thread=False)
     cursor = conn.cursor()
     
     # Kullanıcılar tablosu
@@ -19,10 +18,23 @@ def init_db():
         )
     ''')
     
+    # Ayarlar tablosu (Gizli Davet Kodu için)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    ''')
+    
     # Varsayılan yönetici hesabı yoksa oluştur (Kullanıcı adı: admin, Şifre: 12345)
     cursor.execute("SELECT COUNT(*) FROM users")
     if cursor.fetchone()[0] == 0:
         cursor.execute("INSERT INTO users (username, password, is_admin) VALUES (?, ?, ?)", ("admin", "12345", 1))
+        
+    # Varsayılan davet kodu yoksa oluştur
+    cursor.execute("SELECT value FROM settings WHERE key = 'invite_code'")
+    if not cursor.fetchone():
+        cursor.execute("INSERT INTO settings (key, value) VALUES ('invite_code', 'santiye2026')")
     
     # Projeler tablosu
     cursor.execute('''
@@ -83,7 +95,7 @@ def init_db():
 init_db()
 
 def run_query(query, params=(), fetch=False):
-    conn = sqlite3.connect("insaat_takip_v2.db", check_same_thread=False)
+    conn = sqlite3.connect("insaat_takip_v4.db", check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute(query, params)
     if fetch:
@@ -102,20 +114,66 @@ if "user_id" not in st.session_state:
 st.set_page_config(page_title="Şantiye ve Cari Takip Sistemi", layout="wide")
 
 if st.session_state.user_id is None:
-    st.title("🏗️ Şantiye Yönetim Sistemi - Giriş")
-    st.info("Bu sistem kontrollü erişime sahiptir. Lütfen tarafınıza tanımlanan kullanıcı adı ve şifre ile giriş yapın.")
+    st.title("🏗️ Şantiye Yönetim Sistemi")
     
-    username = st.text_input("Kullanıcı Adı", key="login_user")
-    password = st.text_input("Şifre", type="password", key="login_pass")
-    if st.button("Giriş Yap"):
-        user = run_query("SELECT id, username, is_admin FROM users WHERE username = ? AND password = ?", (username, password), fetch=True)
-        if user:
-            st.session_state.user_id = user[0][0]
-            st.session_state.username = user[0][1]
-            st.session_state.is_admin = user[0][2]
-            st.rerun()
-        else:
-            st.error("Kullanıcı adı veya şifre hatalı!")
+    tab1, tab2, tab3 = st.tabs(["Giriş Yap", "Kayıt Ol (Davet Kodu)", "Şifremi Unuttum"])
+    
+    with tab1:
+        st.subheader("Sisteme Giriş Yap")
+        username = st.text_input("Kullanıcı Adı", key="login_user")
+        password = st.text_input("Şifre", type="password", key="login_pass")
+        if st.button("Giriş Yap"):
+            user = run_query("SELECT id, username, is_admin FROM users WHERE username = ? AND password = ?", (username, password), fetch=True)
+            if user:
+                st.session_state.user_id = user[0][0]
+                st.session_state.username = user[0][1]
+                st.session_state.is_admin = user[0][2]
+                st.rerun()
+            else:
+                st.error("Kullanıcı adı veya şifre hatalı!")
+                
+    with tab2:
+        st.subheader("Yeni Müteahhit Kaydı")
+        st.info("Sisteme kayıt olabilmeniz için yönetici tarafından size verilen **Davet Kodu**'nu girmeniz gerekmektedir.")
+        reg_user = st.text_input("Yeni Kullanıcı Adı Belirleyin", key="reg_user")
+        reg_pass = st.text_input("Yeni Şifre Belirleyin", type="password", key="reg_pass")
+        reg_code = st.text_input("Gizli Davet Kodu", type="password", key="reg_code")
+        
+        if st.button("Hesabımı Oluştur"):
+            if reg_user and reg_pass and reg_code:
+                db_code = run_query("SELECT value FROM settings WHERE key = 'invite_code'", fetch=True)[0][0]
+                if reg_code == db_code:
+                    try:
+                        run_query("INSERT INTO users (username, password, is_admin) VALUES (?, ?, 0)", (reg_user, reg_pass))
+                        st.success("Kayıt başarılı! 'Giriş Yap' sekmesinden giriş yapabilirsiniz.")
+                    except:
+                        st.error("Bu kullanıcı adı zaten alınmış, lütfen başka bir tane deneyin.")
+                else:
+                    st.error("Hatalı Davet Kodu!")
+            else:
+                st.warning("Lütfen tüm alanları doldurun.")
+
+    with tab3:
+        st.subheader("Şifre Sıfırlama")
+        st.info("Şifrenizi unuttuysanız kullanıcı adınızı, yeni şifrenizi ve sistemin **Gizli Davet Kodu**'nu girerek şifrenizi yenileyebilirsiniz.")
+        f_user = st.text_input("Kullanıcı Adınız", key="f_user")
+        f_new_pass = st.text_input("Yeni Şifreniz", type="password", key="f_new_pass")
+        f_code = st.text_input("Gizli Davet Kodu", type="password", key="f_code")
+        
+        if st.button("Şifremi Sıfırla"):
+            if f_user and f_new_pass and f_code:
+                db_code = run_query("SELECT value FROM settings WHERE key = 'invite_code'", fetch=True)[0][0]
+                if f_code == db_code:
+                    user_check = run_query("SELECT id FROM users WHERE username = ?", (f_user,), fetch=True)
+                    if user_check:
+                        run_query("UPDATE users SET password = ? WHERE username = ?", (f_new_pass, f_user))
+                        st.success("Şifreniz başarıyla güncellendi! 'Giriş Yap' sekmesinden giriş yapabilirsiniz.")
+                    else:
+                        st.error("Böyle bir kullanıcı adı bulunamadı.")
+                else:
+                    st.error("Hatalı Davet Kodu!")
+            else:
+                st.warning("Lütfen tüm alanları doldurun.")
 else:
     # --- ANA UYGULAMA ---
     st.sidebar.title(f"Hoş geldiniz, {st.session_state.username}")
@@ -125,20 +183,39 @@ else:
         st.session_state.is_admin = 0
         st.rerun()
         
-    # YÖNETİCİ PANELİ (Sadece Admin yeni müteahhit hesabı açabilir)
-    if st.session_state.is_admin == 1:
-        with st.sidebar.expander("🛠️ Yönetici: Yeni Müteahhit Ekle"):
-            new_m_user = st.text_input("Müteahhit Kullanıcı Adı", key="new_m_user")
-            new_m_pass = st.text_input("Müteahhit Şifresi", type="password", key="new_m_pass")
-            if st.button("Müteahhit Hesabı Oluştur"):
-                if new_m_user and new_m_pass:
-                    try:
-                        run_query("INSERT INTO users (username, password, is_admin) VALUES (?, ?, 0)", (new_m_user, new_m_pass))
-                        st.success(f"'{new_m_user}' hesabı oluşturuldu!")
-                    except:
-                        st.error("Bu kullanıcı adı zaten kullanımda.")
+    # ŞİFRE DEĞİŞTİRME PANELİ (Giriş yapmış kullanıcı için)
+    with st.sidebar.expander("⚙️ Şifremi Değiştir"):
+        old_pass = st.text_input("Mevcut Şifre", type="password", key="old_p")
+        new_pass_1 = st.text_input("Yeni Şifre", type="password", key="new_p1")
+        new_pass_2 = st.text_input("Yeni Şifre (Tekrar)", type="password", key="new_p2")
+        if st.button("Şifreyi Güncelle"):
+            if old_pass and new_pass_1 and new_pass_2:
+                current_db_pass = run_query("SELECT password FROM users WHERE id = ?", (st.session_state.user_id,), fetch=True)[0][0]
+                if old_pass == current_db_pass:
+                    if new_pass_1 == new_pass_2:
+                        run_query("UPDATE users SET password = ? WHERE id = ?", (new_pass_1, st.session_state.user_id))
+                        st.success("Şifreniz başarıyla değiştirildi!")
+                    else:
+                        st.error("Yeni şifreler birbiriyle uyuşmuyor.")
                 else:
-                    st.warning("Lütfen kullanıcı adı ve şifre girin.")
+                    st.error("Mevcut şifrenizi hatalı girdiniz.")
+            else:
+                st.warning("Lütfen tüm alanları doldurun.")
+
+    # YÖNETİCİ PANELİ (Sadece Admin davet kodunu değiştirebilir)
+    if st.session_state.is_admin == 1:
+        with st.sidebar.expander("🛠️ Yönetici Ayarları"):
+            current_code = run_query("SELECT value FROM settings WHERE key = 'invite_code'", fetch=True)[0][0]
+            st.write(f"Mevcut Davet Kodu: **{current_code}**")
+            
+            new_invite = st.text_input("Yeni Davet Kodu Belirle", key="new_inv")
+            if st.button("Kodu Güncelle"):
+                if new_invite:
+                    run_query("UPDATE settings SET value = ? WHERE key = 'invite_code'", (new_invite,))
+                    st.success("Davet kodu güncellendi!")
+                    st.rerun()
+                else:
+                    st.warning("Kod boş olamaz.")
 
     st.sidebar.header("Proje Yönetimi")
     projects = run_query("SELECT id, name FROM projects WHERE user_id = ?", (st.session_state.user_id,), fetch=True)
