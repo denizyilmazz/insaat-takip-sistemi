@@ -5,7 +5,7 @@ from datetime import datetime
 
 # --- VERİTABANI İŞLEMLERİ ---
 def init_db():
-    conn = sqlite3.connect("insaat_takip_v4.db", check_same_thread=False)
+    conn = sqlite3.connect("insaat_takip_v5.db", check_same_thread=False)
     cursor = conn.cursor()
     
     # Kullanıcılar tablosu
@@ -45,13 +45,16 @@ def init_db():
         )
     ''')
     
-    # Ev Sahipleri / Müşteriler tablosu
+    # Ev Sahipleri / Müşteriler tablosu (Blok, kat, daire ve açıklama eklendi)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS customers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             project_id INTEGER,
             name TEXT,
-            apartment_no TEXT,
+            blok TEXT,
+            kat TEXT,
+            daire TEXT,
+            description TEXT,
             total_price REAL
         )
     ''')
@@ -95,7 +98,7 @@ def init_db():
 init_db()
 
 def run_query(query, params=(), fetch=False):
-    conn = sqlite3.connect("insaat_takip_v4.db", check_same_thread=False)
+    conn = sqlite3.connect("insaat_takip_v5.db", check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute(query, params)
     if fetch:
@@ -183,7 +186,7 @@ else:
         st.session_state.is_admin = 0
         st.rerun()
         
-    # ŞİFRE DEĞİŞTİRME PANELİ (Giriş yapmış kullanıcı için)
+    # ŞİFRE DEĞİŞTİRME PANELİ
     with st.sidebar.expander("⚙️ Şifremi Değiştir"):
         old_pass = st.text_input("Mevcut Şifre", type="password", key="old_p")
         new_pass_1 = st.text_input("Yeni Şifre", type="password", key="new_p1")
@@ -202,7 +205,7 @@ else:
             else:
                 st.warning("Lütfen tüm alanları doldurun.")
 
-    # YÖNETİCİ PANELİ (Sadece Admin davet kodunu değiştirebilir)
+    # YÖNETİCİ PANELİ
     if st.session_state.is_admin == 1:
         with st.sidebar.expander("🛠️ Yönetici Ayarları"):
             current_code = run_query("SELECT value FROM settings WHERE key = 'invite_code'", fetch=True)[0][0]
@@ -244,27 +247,38 @@ else:
             st.subheader("Ev Sahipleri ve Kalan Borç Takibi")
             
             with st.form("new_customer"):
-                col1, col2, col3 = st.columns(3)
+                col1, col2, col3, col4 = st.columns(4)
                 c_name = col1.text_input("Ev Sahibi Adı Soyadı")
-                c_apt = col2.text_input("Daire No / Blok")
-                c_price = col3.number_input("Toplam Satış Bedeli (TL)", min_value=0.0, step=1000.0)
+                c_blok = col2.text_input("Blok (Örn: A Blok)")
+                c_kat = col3.text_input("Kat (Örn: 3. Kat)")
+                c_daire = col4.text_input("Daire No (Örn: 12)")
+                
+                col5, col6 = st.columns(2)
+                c_price = col5.number_input("Toplam Satış Bedeli (TL)", min_value=0.0, step=1000.0)
+                c_desc = col6.text_area("Açıklama / Notlar", placeholder="Örn: Kapora alındı, tapu aşamasında...")
+                
                 submit_c = st.form_submit_button("Ev Sahibi Ekle")
                 if submit_c and c_name:
-                    run_query("INSERT INTO customers (project_id, name, apartment_no, total_price) VALUES (?, ?, ?, ?)", 
-                              (project_id, c_name, c_apt, c_price))
+                    run_query("INSERT INTO customers (project_id, name, blok, kat, daire, description, total_price) VALUES (?, ?, ?, ?, ?, ?, ?)", 
+                              (project_id, c_name, c_blok, c_kat, c_daire, c_desc, c_price))
                     st.success("Ev sahibi eklendi!")
                     st.rerun()
                     
             st.divider()
-            customers = run_query("SELECT id, name, apartment_no, total_price FROM customers WHERE project_id = ?", (project_id,), fetch=True)
+            customers = run_query("SELECT id, name, blok, kat, daire, description, total_price FROM customers WHERE project_id = ?", (project_id,), fetch=True)
             
             if customers:
-                customer_dict = {f"{c[1]} (Daire: {c[2]})": c[0] for c in customers}
+                customer_dict = {f"{c[1]} (Blok: {c[2]} | Kat: {c[3]} | Daire: {c[4]})": c[0] for c in customers}
                 selected_cust = st.selectbox("İşlem Yapılacak Ev Sahibini Seçin", list(customer_dict.keys()))
                 cust_id = customer_dict[selected_cust]
                 
                 c_info = [c for c in customers if c[0] == cust_id][0]
-                total_price = c_info[3]
+                total_price = c_info[6]
+                c_description = c_info[5]
+                
+                # Açıklama varsa göster
+                if c_description:
+                    st.info(f"📝 **Not / Açıklama:** {c_description}")
                 
                 payments = run_query("SELECT SUM(amount) FROM customer_payments WHERE customer_id = ?", (cust_id,), fetch=True)[0][0] or 0.0
                 remaining_debt = total_price - payments
