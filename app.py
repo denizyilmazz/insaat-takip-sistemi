@@ -76,7 +76,10 @@ def generate_contract_pdf(project_name, name, blok, kat, daire, total_price, pai
         pdf.cell(30, 6, tr_to_en(str(p_due)), 1, 0, "C")
         pdf.cell(80, 6, tr_to_en(status_text), 1, 1, "L")
         
-    return pdf.output(dest='S').encode('latin1')
+    pdf_data = pdf.output()
+    if isinstance(pdf_data, str):
+        return pdf_data.encode('latin1')
+    return bytes(pdf_data)
 
 # --- VERİTABANI VE AKILLI GÜNCELLEME İŞLEMLERİ ---
 def init_db():
