@@ -381,33 +381,50 @@ else:
         project_id = project_dict[selected_project_name]
         st.title(f"📍 Proje: {selected_project_name}")
         
-        tab_homeowners, tab_tradesmen, tab_summary = st.tabs(["🏠 Ev Sahipleri & Taksit Tablosu", "👷 Ustalar & Taşeronlar", "📊 Genel Durum & Kâr/Zarar"])
+        tab_homeowners, tab_tradesmen, tab_summary = st.tabs(["🏠 Ev Sahipleri & Sözleşme Nüshaları", "👷 Ustalar & Taşeronlar", "📊 Genel Durum & Kâr/Zarar"])
         
-        # --- EV SAHİPLERİ & TEK TABLO SEKMESİ ---
+        # --- EV SAHİPLERİ & SÖZLEŞME NÜSHALARI SEKMESİ ---
         with tab_homeowners:
-            st.subheader("Ev Sahipleri Master Cari Tablosu ve Taksit Takibi")
+            st.subheader("Ev Sahipleri Sözleşme Nüshaları ve Taksit Takibi")
             
-            # --- 1. PROJE GENEL CARİ TABLOSU ---
-            all_custs_master = run_query("SELECT id, name, blok, kat, daire, total_price, sale_date FROM customers WHERE project_id = ?", (project_id,), fetch=True)
+            # --- 1. PROJE GENEL CARİ & SÖZLEŞME NÜSHASI ÖZETİ ---
+            all_custs_master = run_query("SELECT id, name, blok, kat, daire, total_price, sale_date, description FROM customers WHERE project_id = ?", (project_id,), fetch=True)
             if all_custs_master:
-                master_table_rows = []
+                st.markdown("### 📋 Proje Ev Sahipleri Sözleşme Nüshaları ve Cari Dökümleri")
+                st.info("💡 Aşağıdaki alanlarda her ev sahibinin sözleşme bilgileri, tüm ödenmiş taksitleri (tarihleri ve yöntemleriyle) ve ödenecek bütün gelecek taksitleri bir sözleşme nüshası formatında listelenmektedir.")
+                
                 for mc in all_custs_master:
-                    mc_id, mc_name, mc_blok, mc_kat, mc_daire, mc_tp, mc_sdate = mc
-                    mc_paid = run_query("SELECT SUM(amount) FROM customer_payment_plans WHERE customer_id = ? AND is_paid = 1", (mc_id,), fetch=True)[0][0] or 0.0
+                    mc_id, mc_name, mc_blok, mc_kat, mc_daire, mc_tp, mc_sdate, mc_desc = mc
+                    mc_plans = run_query("SELECT installment_name, amount, due_date, is_paid, paid_date, payment_method FROM customer_payment_plans WHERE customer_id = ? ORDER BY due_date ASC", (mc_id,), fetch=True)
+                    mc_paid = sum([p[1] for p in mc_plans if p[3] == 1])
                     mc_rem = mc_tp - mc_paid
-                    master_table_rows.append({
-                        "Ev Sahibi": mc_name,
-                        "Blok": mc_blok or "-",
-                        "Kat": mc_kat or "-",
-                        "Daire": mc_daire or "-",
-                        "Sözleşme Tarihi": mc_sdate or "-",
-                        "Toplam Satış (TL)": f"{mc_tp:,.2f}",
-                        "Ödenen (TL)": f"{mc_paid:,.2f}",
-                        "Kalan Borç (TL)": f"{mc_rem:,.2f}"
-                    })
-                df_master = pd.DataFrame(master_table_rows)
-                st.markdown("### 📋 Proje Ev Sahipleri Genel Cari Özeti")
-                st.dataframe(df_master, use_container_width=True)
+                    
+                    with st.expander(f"📄 {mc_name} | Blok: {mc_blok or '-'} | Kat: {mc_kat or '-'} | Daire: {mc_daire or '-'} (Kalan Borç: {mc_rem:,.2f} TL)"):
+                        col_s1, col_s2, col_s3 = st.columns(3)
+                        col_s1.write(f"**Sözleşme Tarihi:** {mc_sdate or '-'}")
+                        col_s2.write(f"**Toplam Satış Bedeli:** {mc_tp:,.2f} TL")
+                        col_s3.write(f"**Ödenen Toplam:** {mc_paid:,.2f} TL")
+                        if mc_desc:
+                            st.write(f"**Notlar:** {mc_desc}")
+                        
+                        st.markdown("#### Taksit ve Ödeme Nüshası Tablosu")
+                        if mc_plans:
+                            plan_rows = []
+                            for p in mc_plans:
+                                p_name, p_amt, p_due, p_is_paid, p_pdate, p_pmeth = p
+                                if p_is_paid == 1:
+                                    status_str = f"🟢 Ödendi (Ödeme Tarihi: {p_pdate} | Yöntem: {p_pmeth or '-'})"
+                                else:
+                                    status_str = f"⏳ Ödenecek (Vade Tarihi: {p_due})"
+                                plan_rows.append({
+                                    "Taksit / Açıklama": p_name,
+                                    "Tutar (TL)": f"{p_amt:,.2f}",
+                                    "Vade / Ödeme Tarihi": p_pdate if p_is_paid == 1 else p_due,
+                                    "Durum": status_str
+                                })
+                            st.dataframe(pd.DataFrame(plan_rows), use_container_width=True)
+                        else:
+                            st.info("Bu ev sahibi için tanımlanmış taksit planı bulunmuyor.")
                 st.divider()
 
             # --- 2. YENİ EV SAHİBİ EKLEME ---
@@ -443,7 +460,7 @@ else:
             
             if customers:
                 customer_dict = {f"{c[1]} (Blok: {c[2]} | Kat: {c[3]} | Daire: {c[4]})": c[0] for c in customers}
-                selected_cust = st.selectbox("İşlem Yapılacak Ev Sahibini Seçin (Tek Taksit Tablosu)", list(customer_dict.keys()))
+                selected_cust = st.selectbox("İşlem Yapılacak Ev Sahibini Seçin (Taksit Öde & Yönet)", list(customer_dict.keys()))
                 cust_id = customer_dict[selected_cust]
                 
                 c_info = [c for c in customers if c[0] == cust_id][0]
@@ -499,6 +516,7 @@ else:
                 
                 # --- HESAPLAMALAR ---
                 total_paid = run_query("SELECT SUM(amount) FROM customer_payment_plans WHERE customer_id = ? AND is_paid = 1", (cust_id,), fetch=True)[0][0] or 0.0
+                payment_plans = run_query("SELECT id, installment_name, amount, due_date, is_paid, paid_date, payment_method, receipt_file_path FROM customer_payment_plans WHERE customer_id = ? ORDER BY due_date ASC", (cust_id,), fetch=True)
                 remaining_debt = total_price - total_paid
                 
                 col_a, col_b, col_c = st.columns(3)
@@ -507,8 +525,6 @@ else:
                 col_c.metric("Kalan Borç", f"{remaining_debt:,.2f} TL", delta_color="inverse")
                 
                 # --- PDF ÇIKTISI ALMA ---
-                payment_plans = run_query("SELECT id, installment_name, amount, due_date, is_paid, paid_date, payment_method, receipt_file_path FROM customer_payment_plans WHERE customer_id = ? ORDER BY due_date ASC", (cust_id,), fetch=True)
-                
                 pdf_btn_col1, _ = st.columns([2, 4])
                 with pdf_btn_col1:
                     if st.button("📄 Bu Müşterinin Raporunu PDF İndir"):
@@ -516,7 +532,7 @@ else:
                             pdf = FPDF()
                             pdf.add_page()
                             pdf.set_font("Helvetica", "B", 14)
-                            pdf.cell(0, 10, tr_to_en(f"Musteri Odeme ve Taksit Raporu"), 0, 1, "C")
+                            pdf.cell(0, 10, tr_to_en(f"Musteri Sozlesme ve Odeme Nushasi"), 0, 1, "C")
                             pdf.set_font("Helvetica", "", 10)
                             pdf.cell(0, 6, tr_to_en(f"Proje: {selected_project_name}"), 0, 1)
                             pdf.cell(0, 6, tr_to_en(f"Ev Sahibi: {c_name_val}"), 0, 1)
@@ -527,17 +543,17 @@ else:
                             pdf.ln(4)
                             
                             pdf.set_font("Helvetica", "B", 11)
-                            pdf.cell(0, 6, tr_to_en("Taksit ve Odeme Tablosu:"), 0, 1)
+                            pdf.cell(0, 6, tr_to_en("Taksit ve Odeme Nushasi Tablosu:"), 0, 1)
                             pdf.set_font("Helvetica", "", 9)
                             for p in payment_plans:
-                                status_str = "Odendi" if p[4] == 1 else "Odenmedi"
-                                pdf.cell(0, 5, tr_to_en(f"- {p[1]}: {p[2]:,.2f} TL | Vade: {p[3]} | Durum: {status_str}"), 0, 1)
+                                status_str = f"Odendi ({p[5]} - {p[6] or '-'})" if p[4] == 1 else f"Odenmedi (Vade: {p[3]})"
+                                pdf.cell(0, 5, tr_to_en(f"- {p[1]}: {p[2]:,.2f} TL | {status_str}"), 0, 1)
                                 
                             pdf_output = pdf.output(dest='S').encode('latin1')
                             st.download_button(
                                 label="📥 PDF İndirmeye Hazır (Tıkla)",
                                 data=pdf_output,
-                                file_name=f"{c_name_val}_odeme_raporu.pdf",
+                                file_name=f"{c_name_val}_sozlesme_nushasi.pdf",
                                 mime="application/pdf",
                                 key="download_pdf_final"
                             )
@@ -571,7 +587,6 @@ else:
                     for p in payment_plans:
                         p_id, p_name, p_amt, p_due, is_paid, paid_date, p_meth, r_path = p
                         
-                        # Vade gecikme kontrolü
                         is_overdue = False
                         try:
                             d_date = datetime.strptime(p_due, "%Y-%m-%d").date()
@@ -580,11 +595,9 @@ else:
                         except:
                             pass
                         
-                        # Uyarı gösterimi
                         if is_overdue:
                             st.error(f"⚠️ **Vadesi Geçti!** `{p_name}` ({p_amt:,.2f} TL) vadesi **{p_due}** tarihinde dolmuş ve henüz ödenmemiştir!")
 
-                        # Tek satır içinde hem bilgi hem ödeme seçeneği
                         with st.container():
                             col_t1, col_t2, col_t3 = st.columns([3, 2, 2])
                             with col_t1:
@@ -597,7 +610,6 @@ else:
                             
                             with col_t2:
                                 if is_paid == 0:
-                                    # Ödeme Yapma Formu (Her taksit için özel)
                                     with st.form(f"pay_row_form_{p_id}"):
                                         pay_m = st.selectbox("Yöntem", ["Banka Havalesi", "Elden Nakit", "Çek", "Kredi Kartı"], key=f"pmethod_{p_id}")
                                         pay_file = st.file_uploader("Dekont", type=["pdf", "png", "jpg"], key=f"pfile_{p_id}")
@@ -621,7 +633,6 @@ else:
                                             st.download_button("📥 Dekont İndir", data=rf, file_name=os.path.basename(r_path), key=f"down_r_{p_id}")
                             
                             with col_t3:
-                                # Ödenmişse ödemeyi geri al / İptal et ya da taksiti sil
                                 if is_paid == 1:
                                     if st.button("Ödemeyi İptal Et", key=f"unpay_{p_id}"):
                                         run_query("UPDATE customer_payment_plans SET is_paid = 0, paid_date = NULL, payment_method = NULL, receipt_file_path = NULL WHERE id = ?", (p_id,))
