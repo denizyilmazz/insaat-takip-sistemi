@@ -3,9 +3,9 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 
-# --- VERİTABANI İŞLEMLERİ ---
+# --- VERİTABANI İŞLEMLERİ (İsim sabitlendi: insaat_takip.db) ---
 def init_db():
-    conn = sqlite3.connect("insaat_takip_v7.db", check_same_thread=False)
+    conn = sqlite3.connect("insaat_takip.db", check_same_thread=False)
     cursor = conn.cursor()
     
     # Kullanıcılar tablosu
@@ -36,7 +36,7 @@ def init_db():
     if not cursor.fetchone():
         cursor.execute("INSERT INTO settings (key, value) VALUES ('invite_code', 'santiye2026')")
     
-    # Projeler tablosu (Daire sayısı eklendi)
+    # Projeler tablosu
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS projects (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,7 +113,7 @@ def init_db():
 init_db()
 
 def run_query(query, params=(), fetch=False):
-    conn = sqlite3.connect("insaat_takip_v7.db", check_same_thread=False)
+    conn = sqlite3.connect("insaat_takip.db", check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute(query, params)
     if fetch:
@@ -260,7 +260,6 @@ else:
                 run_query("INSERT INTO projects (user_id, name, total_apartments) VALUES (?, ?, ?)", 
                           (st.session_state.user_id, new_proj_name, total_aps))
                 
-                # Yeni eklenen projenin ID'sini al
                 proj_id = run_query("SELECT id FROM projects WHERE user_id = ? ORDER BY id DESC LIMIT 1", (st.session_state.user_id,), fetch=True)[0][0]
                 
                 if use_floor_pricing and floors_data:
@@ -418,11 +417,9 @@ else:
         with tab_summary:
             st.subheader(f"📊 {selected_project_name} - Finansal Özet ve Kâr/Zarar Durumu")
             
-            # Proje daire bilgisi
             p_aps = run_query("SELECT total_apartments FROM projects WHERE id = ?", (project_id,), fetch=True)[0][0] or 0
             st.write(f"🏢 **Toplam Daire Kapasitesi:** {p_aps} Daire")
             
-            # Potansiyel Gelir (Kat planından veya satılanlardan hesapla)
             floor_plans = run_query("SELECT apartment_count, unit_price FROM project_floors WHERE project_id = ?", (project_id,), fetch=True)
             if floor_plans:
                 potential_revenue = sum([f[0] * f[1] for f in floor_plans])
@@ -430,7 +427,6 @@ else:
             else:
                 potential_revenue = 0
                 
-            # Gerçekleşen Satış Geliri (Ev sahiplerine satılan toplam tutar)
             all_cust = run_query("SELECT id, total_price FROM customers WHERE project_id = ?", (project_id,), fetch=True)
             total_sales_value = sum([c[1] for c in all_cust])
             total_collected = 0
@@ -442,7 +438,6 @@ else:
                 total_collected += paid
                 total_receivable += (tp - paid)
                 
-            # Toplam Usta Maliyeti (Borçlandırılan toplam hakedişler)
             all_t = run_query("SELECT id FROM tradesmen WHERE project_id = ?", (project_id,), fetch=True)
             total_tradesman_paid = 0
             total_tradesman_debt = 0
@@ -452,8 +447,6 @@ else:
                 total_tradesman_debt += sum([x[1] for x in t_trans if x[0] == 'Hakediş (Borç)'])
                 total_tradesman_paid += sum([x[1] for x in t_trans if x[0] == 'Ödeme'])
                 
-            # Kâr / Zarar Hesaplama
-            # Eğer kat planı fiyatı girildiyse baz alınır, girilmediyse yapılan toplam satış sözleşmeleri baz alınır.
             base_revenue = potential_revenue if potential_revenue > 0 else total_sales_value
             estimated_profit = base_revenue - total_tradesman_debt
             
