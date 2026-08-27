@@ -462,6 +462,30 @@ else:
                 c_sale_date = c_info[7]
                 c_contract_path = c_info[8]
                 
+                # --- EV SAHİBİNİ DÜZENLE / SİL PANELİ ---
+                with st.expander("⚙️ Ev Sahibini Düzenle / Sil"):
+                    with st.form(f"edit_customer_form_{cust_id}"):
+                        up_name = st.text_input("Ev Sahibi Adı Soyadı", value=c_name_val)
+                        up_blok = st.text_input("Blok", value=c_blok_val or "")
+                        up_kat = st.text_input("Kat", value=c_kat_val or "")
+                        up_daire = st.text_input("Daire No", value=c_daire_val or "")
+                        up_price = st.number_input("Toplam Satış Bedeli (TL)", min_value=0.0, value=float(total_price), step=1000.0)
+                        up_desc = st.text_area("Açıklama / Notlar", value=c_description or "")
+                        
+                        submit_up_cust = st.form_submit_button("Ev Sahibini Güncelle")
+                        if submit_up_cust:
+                            run_query("UPDATE customers SET name = ?, blok = ?, kat = ?, daire = ?, description = ?, total_price = ? WHERE id = ?",
+                                      (up_name, up_blok, up_kat, up_daire, up_desc, up_price, cust_id))
+                            st.success("Ev sahibi bilgileri güncellendi!")
+                            st.rerun()
+                    
+                    if st.button("Bu Ev Sahibini Tamamen Sil", key=f"del_cust_btn_{cust_id}", type="primary"):
+                        run_query("DELETE FROM customer_payments WHERE customer_id = ?", (cust_id,))
+                        run_query("DELETE FROM customer_payment_plans WHERE customer_id = ?", (cust_id,))
+                        run_query("DELETE FROM customers WHERE id = ?", (cust_id,))
+                        st.success("Ev sahibi silindi!")
+                        st.rerun()
+
                 if c_sale_date:
                     st.write(f"📅 **Sözleşme / Satış Tarihi:** {c_sale_date}")
                 if c_description:
@@ -567,9 +591,9 @@ else:
                         st.success("Taksit vade planına eklendi!")
                         st.rerun()
 
-                # Taksitleri Excel Benzeri Tablo Olarak Göster
+                # Taksitleri Excel Benzeri Tablo Olarak Göster ve Satır Silme Butonu Ekle
                 if payment_plans:
-                    plan_table_rows = []
+                    st.markdown("#### Taksit Listesi ve İşlemler")
                     running_cumulative_plan = 0
                     for p in payment_plans:
                         p_id, p_name, p_amt, p_due = p
@@ -587,14 +611,14 @@ else:
                         except:
                             pass
                         
-                        plan_table_rows.append({
-                            "Taksit Adı": p_name,
-                            "Planlanan Tutar (TL)": f"{p_amt:,.2f}",
-                            "Vade Tarihi": p_due,
-                            "Durum": status_badge
-                        })
-                    df_cust_plan = pd.DataFrame(plan_table_rows)
-                    st.dataframe(df_cust_plan, use_container_width=True)
+                        col_row1, col_row2 = st.columns([5, 1])
+                        with col_row1:
+                            st.info(f"📌 **{p_name}** | Tutar: **{p_amt:,.2f} TL** | Vade: **{p_due}** | Durum: **{status_badge}**")
+                        with col_row2:
+                            if st.button("Sil", key=f"del_plan_row_{p_id}"):
+                                run_query("DELETE FROM customer_payment_plans WHERE id = ?", (p_id,))
+                                st.success("Taksit satırı silindi!")
+                                st.rerun()
                 else:
                     st.info("Bu müşteri için henüz bir taksit planı girilmemiş.")
 
@@ -695,10 +719,32 @@ else:
                 t_id = t_dict[sel_t_str]
                 
                 t_info = [t for t in tradesmen_list if t[0] == t_id][0]
+                t_name_val = t_info[1]
+                t_type_val = t_info[2]
                 t_description = t_info[3]
                 t_start_date = t_info[4]
                 t_contract_path = t_info[5]
                 
+                # --- USTA DÜZENLE / SİL PANELİ ---
+                with st.expander("⚙️ Ustayı Düzenle / Sil"):
+                    with st.form(f"edit_trade_form_{t_id}"):
+                        up_t_name = st.text_input("Usta / Firma Adı", value=t_name_val)
+                        up_t_type = st.text_input("Usta Branşı", value=t_type_val)
+                        up_t_desc = st.text_area("Usta Açıklaması / Notlar", value=t_description or "")
+                        
+                        submit_up_t = st.form_submit_button("Ustayı Güncelle")
+                        if submit_up_t:
+                            run_query("UPDATE tradesmen SET name = ?, trade_type = ?, description = ? WHERE id = ?",
+                                      (up_t_name, up_t_type, up_t_desc, t_id))
+                            st.success("Usta bilgileri güncellendi!")
+                            st.rerun()
+                    
+                    if st.button("Bu Ustayı Tamamen Sil", key=f"del_trade_btn_{t_id}", type="primary"):
+                        run_query("DELETE FROM tradesman_transactions WHERE tradesman_id = ?", (t_id,))
+                        run_query("DELETE FROM tradesmen WHERE id = ?", (t_id,))
+                        st.success("Usta silindi!")
+                        st.rerun()
+
                 if t_start_date:
                     st.write(f"📅 **Anlaşma / Başlangıç Tarihi:** {t_start_date}")
                 if t_description:
@@ -817,7 +863,7 @@ else:
             estimated_profit = base_revenue - total_tradesman_debt
             
             st.divider()
-            col1, col2 = this_cols = st.columns(2)
+            col1, col2 = st.columns(2)
             
             with col1:
                 st.markdown("### 💰 Gelir & Tahsilat Durumu")
